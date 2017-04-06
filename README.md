@@ -13,6 +13,7 @@ To install the script, simply copy the main.py, backend.py, and mainwindow_auto.
 
 Start with:
 	- python3 main.py
+
 Todo
 ------
 	- Handle directories

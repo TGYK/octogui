@@ -33,6 +33,29 @@ def getConfig(index):
 				print("Exception caught trying to read server address from config")
 				address = None
 		return address
+	if index == "numheads":
+		if "Toolheads" not in config.sections():
+			print("No [Toolheads] section found within config!")
+			return None
+		else:
+			try:
+				numheads = config.get("Toolheads", "numheads")
+			except:
+				print("Exception caught trying to read number of heads from config")
+				numheads = "1"
+		return numheads
+	if index == "mixing":
+		if "Toolheads" not in config.sections():
+			print("No [Toolheads] section found within config!")
+			return None
+		else:
+			try:
+				mix = config.get("Toolheads", "mixing")
+			except:
+				print("Exception caught trying to mixing head from config")
+				mix = "False"
+		mix = json.loads(mix)
+		return mix
 	else:
 		print("Unrecognized getConfig command!")
 		return None
@@ -201,19 +224,19 @@ def getState(api, server):
 			state = data['current']['state']
 	return state
 
-def getHeadTemp(data):
-	if data['temperature']['tool0']['actual'] == None:
+def getHeadTemp(data, tool="tool0"):
+	if data['temperature'][tool]['actual'] == None:
 		temp = 0
 	else:
-		temp = data['temperature']['tool0']['actual']
+		temp = data['temperature'][tool]['actual']
 	return temp
 
-def getHeadTarget(data):
+def getHeadTarget(data, tool='tool0'):
 	temp = 0
-	if data['temperature']['tool0']['target'] == None:
+	if data['temperature'][tool]['target'] == None:
 		temp = 0
 	else:
-		temp = data['temperature']['tool0']['target']
+		temp = data['temperature'][tool]['target']
 	return temp
 
 def getBedTemp(data):
@@ -321,12 +344,12 @@ def postFeedRate(api, server, rate):
 		'factor' : rate}
 	response = postRequest(api, server, url, post_fields)
 
-def postHeadTemp(api, server, temp):
+def postHeadTemp(api, server, temp, tool='tool0'):
 	url = "http://"+server+"/api/printer/tool"
 	post_fields = {
 		'command' : 'target',
 		'targets' : {
-			"tool0" : temp}}
+			tool : temp}}
 	response = postRequest(api, server, url, post_fields)
 
 def postBedTemp(api, server, temp):

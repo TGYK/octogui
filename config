@@ -1,4 +1,6 @@
 [Connection]
 apikey = 
 address = 
-
+[Toolheads]
+mixing = false
+numheads = 1

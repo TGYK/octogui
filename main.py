@@ -1,5 +1,5 @@
 #~~~OctoGUI by TGYK~~~
-#Version 0.1
+#Version 0.2
 #Description:
 #-Provides a basic graphical user interface for an octoprint
 #-for use on a raspberry pi with a 2.8" tft LCD screen.
@@ -17,19 +17,24 @@
 #*Impliment move operation
 #*Impliment mkdir operation
 #*Add extruder move sub-menu to control menu
-#*Move progress bar to Monitor page
 #*Come up with method to start on login
 #*Possibly add on-screen keyboard for config page - to not require an ssh login to edit config file/keyboard to type parameters.
 #*Add extruder count and heated bed options to config page
-#**Modify print page UI based on config options for extruder count, heated bed
-#*Add labels to print page UI
 #Known bugs:
 #*
-
-
+###CHANGELOG###
+#V0.2
+#*Fixed TogglePause issues
+#*Added support for up 3 extruders/single mixing in config
+#options
+#*Added new print screens and functionality for suppt of
+#multiple extruders (Heating/Feedrate)
+#Disabled mkdir and move buttons until I add support
 
 import sys
 import PyQt5
+import time
+import threading
 from PyQt5 import QtCore, QtGui
 from PyQt5.QtWidgets import *
 import mainwindow_auto
@@ -77,13 +82,49 @@ class MainWindow(QMainWindow, mainwindow_auto.Ui_MainWindow):
 			self.pageSwitcher.setCurrentWidget(self.monitorPage)
 		elif command == 'print':
 			#Switch to print page, update values, update GUI to reflect these values
-			self.pageSwitcher.setCurrentWidget(self.printPage)
+			if printpage == "pp1":
+				self.pageSwitcher.setCurrentWidget(self.printPage1)
+				self.tempHead0_1.setValue(headTarget)
+				self.tempBed1.setValue(bedTarget)
+			elif printpage == "pp2":
+				self.pageSwitcher.setCurrentWidget(self.printPage2)
+			elif printpage == "pp3":
+				self.pageSwitcher.setCurrentWidget(self.printPage3)
+
 			if apiKey is not None and serverAddr is not None:
 				printerData = getPrinterData(apiKey, serverAddr)
-				headTarget = getHeadTarget(printerData)
+			if printerData is not None:
+				if headCount >= 2 and mixing is True:
+					headTemp = getHeadTemp(printerData)
+					headTarget = getHeadTarget(printerData)
+					self.tempHead0_1.setValue(headTarget)
+				elif headCount == 1 and mixing is False:
+					headTemp = getHeadTemp(printerData)
+					headTarget = getHeadTarget(printerData)
+					self.tempHead0_1.setValue(headTarget)
+				elif headCount == 2 and mixing is False:
+					headTemp0 = getHeadTemp(printerData, "tool0")
+					headTarget0 = getHeadTarget(printerData, "tool0")
+					headTemp1 = getHeadTemp(printerData, "tool1")
+					headTarget1 = getHeadTarget(printerData, "tool1")
+					self.tempHead0_2.setValue(headTarget0)
+					self.tempHead1_2.setValue(headTarget1)
+				elif headCount == 3 and mixing is False:
+					headTemp0 = getHeadTemp(printerData, "tool0")
+					headTarget0 = getHeadTarget(printerData, "tool0")
+					headTemp1 = getHeadTemp(printerData, "tool1")
+					headTarget1 = getHeadTarget(printerData, "tool1")
+					headTemp2 = getHeadTemp(printerData, "tool2")
+					headTarget2 = getHeadTarget(printerData, "tool2")
+					self.tempHead0_3.setValue(headTarget0)
+					self.tempHead1_3.setValue(headTarget1)
+					self.tempHead2_3.setValue(headTarget2)
+
 				bedTarget = getBedTarget(printerData)
-			self.tempHead.setValue(headTarget)
-			self.tempBed.setValue(bedTarget)
+			else:
+				self.pageSwitcher.setCurrentWidget(self.homePage)
+				QMessageBox.information(None,"Error!","Error connecting, see config")
+				return
 		elif command == 'deleteselected':
 			#Delete selected file
 			if apiKey is not None and serverAddr is not None:
@@ -210,13 +251,41 @@ class MainWindow(QMainWindow, mainwindow_auto.Ui_MainWindow):
 		#Set feed rate
 		postFeedRate(apiKey, serverAddr, rate)
 
-	def setHeadTemp(self, temp):
-		#Set tool0 temp
-		postHeadTemp(apiKey, serverAddr, temp)
+	def setHeadTemp(self, temp, tool="tool0"):
+		#Set tool temp
+		postHeadTemp(apiKey, serverAddr, temp, tool)
 
 	def setBedTemp(self, temp):
 		#Set bed temp
 		postBedTemp(apiKey, serverAddr, temp)
+
+	def watchTemp(self, tempobject, dispobject, tool):
+		#Watch dial for changes over 2 seconds, and if none found, set corresponding value
+		def watchDial(self, tempobject, dispobject, tool):
+			global threadRunning
+			stable = False
+			i = 0
+			target = {}
+			while stable == False:
+				i += 1
+				target[i] = tempobject.value()
+				dispobject.display(target[i])
+				if i > 20:
+					f = i - 20
+					if target[i] == target[f]:
+						break
+				time.sleep(0.1)
+			if tool != "bed" and tool != "feed":
+				self.setHeadTemp(target[i], tool)
+			elif tool == "bed":
+				self.setBedTemp(target[i])
+			elif tool == "feed":
+				self.setFeedRate(target[i])
+			threadRunning = False
+		t = threading.Thread(target=watchDial, name="watchDial", args=(self, tempobject, dispobject, tool, ))
+		return t
+
+
 
 	def __init__(self):
 		#Declare global variables
@@ -236,6 +305,15 @@ class MainWindow(QMainWindow, mainwindow_auto.Ui_MainWindow):
 		global feedRate
 		global jobData
 		global printerData
+		global printpage
+		global headCount
+		global mixing
+		global newHeadTemp0
+		global newHeadTemp1
+		global newHeadTemp2
+		global newBedTemp
+		global newFeed
+		global threadRunning
 		#Init stuff for UI
 		super(self.__class__, self).__init__()
 		self.setWindowFlags(QtCore.Qt.FramelessWindowHint)
@@ -250,9 +328,17 @@ class MainWindow(QMainWindow, mainwindow_auto.Ui_MainWindow):
 		jogDist = 1
 		feedRate = 100
 		response = False
+		newHeadTemp0 = 0
+		newHeadTemp1 = 0
+		newHeadTemp2 = 0
+		newBedTemp = 0
+		newFeed = 100
+		threadRunning = False
 		#Get API key from config - update GUI with current figures if found
 		apiKey = getConfig("key")
 		serverAddr = getConfig("address")
+		headCount = int(getConfig("numheads"))
+		mixing = getConfig("mixing")
 		if apiKey == None:
 			print("No API key found in config")
 			apiKey = None
@@ -271,7 +357,6 @@ class MainWindow(QMainWindow, mainwindow_auto.Ui_MainWindow):
 			cfgfile = open("config",'w+')
 			cfgfile.close()
 		#If both api key or server address are None, create config and update with values from UI
-			
 		#Test connection to OctoPrint server with gathered API key and address
 		#If failed, alert to check config
 		if apiKey is not None and serverAddr is not None:
@@ -293,17 +378,64 @@ class MainWindow(QMainWindow, mainwindow_auto.Ui_MainWindow):
 			self.labelTimeLeft.setText(self.convMinSecStr(timeLeft))
 			self.labelPrintTime.setText(self.convMinSecStr(timeSpent))
 			self.printBar.setValue(progress)
+
+		##################################
 		#Try to get /api/printer json data
 		#If not None, update global variables, update GUI to reflect relevant values
 		if apiKey is not None and serverAddr is not None and response is not None:
 			printerData = getPrinterData(apiKey, serverAddr)
+		print("Headcount: ",headCount)
+		print("Mixing: ",mixing)
 		if printerData is not None:
-			headTemp = getHeadTemp(printerData)
-			headTarget = getHeadTarget(printerData)
-			bedTemp = getHeadTemp(printerData)
-			bedTarget = getBedTarget(printerData)
-			self.tempHead.setValue(headTarget)
-			self.tempBed.setValue(bedTarget)
+			if headCount >= 2 and mixing is True:
+				headTemp = getHeadTemp(printerData)
+				headTarget = getHeadTarget(printerData)
+				bedTemp = getBedTemp(printerData)
+				bedTarget = getBedTarget(printerData)
+				self.moveFeed1.setValue(feedRate)
+				self.tempBed1.setValue(bedTarget)
+				self.tempHead0_1.setValue(headTarget)
+				printpage = "pp1"
+			elif headCount == 1 and mixing is False:
+				headTemp = getHeadTemp(printerData)
+				headTarget = getHeadTarget(printerData)
+				bedTemp = getBedTemp(printerData)
+				bedTarget = getBedTarget(printerData)
+				self.moveFeed1.setValue(feedRate)
+				self.tempBed1.setValue(bedTarget)
+				self.tempHead0_1.setValue(headTarget)
+				printpage = "pp1"
+			elif headCount == 2 and mixing is False:
+				headTemp0 = getHeadTemp(printerData, "tool0")
+				headTarget0 = getHeadTarget(printerData, "tool0")
+				headTemp1 = getHeadTemp(printerData, "tool1")
+				headTarget1 = getHeadTarget(printerData, "tool1")
+				bedTarget = getBedTarget(printerData)
+				bedTemp = getBedTemp(printerData)
+				self.moveFeed2.setValue(feedRate)
+				self.tempBed2.setValue(bedTarget)
+				self.tempHead0_2.setValue(headTarget0)
+				self.tempHead1_2.setValue(headTarget1)
+				printpage = "pp2"
+			elif headCount == 3 and mixing is False:
+				headTemp0 = getHeadTemp(printerData, "tool0")
+				headTarget0 = getHeadTarget(printerData, "tool0")
+				headTemp1 = getHeadTemp(printerData, "tool1")
+				headTarget1 = getHeadTarget(printerData, "tool1")
+				headTemp2 = getHeadTemp(printerData, "tool2")
+				headTarget2 = getHeadTarget(printerData, "tool2")
+				bedTarget = getBedTarget(printerData)
+				bedTemp = getBedTemp(printerData)
+				self.moveFeed3.setValue(feedRate)
+				self.tempBed3.setValue(bedTarget)
+				self.tempHead0.setValue(headTarget0)
+				self.tempHead1.setValue(headTarget1)
+				self.tempHead2.setValue(headTarget2)
+				printpage = "pp3"
+			else:
+				printpage = "pp1"
+
+
 		#Try to get server-printer connection state
 		#If not None, update global variables, update GUI to reflect relevant values
 		if apiKey is not None and serverAddr is not None:
@@ -333,8 +465,6 @@ class MainWindow(QMainWindow, mainwindow_auto.Ui_MainWindow):
 				self.btnFile.setEnabled(False)
 		else:
 			self.labelState.setText("Error")
-		#Get default feedrate (100%) from GUI
-		self.moveFeed.setValue(feedRate)
 		#Tell the server about our default feedrate
 		if apiKey is not None and serverAddr is not None:
 			self.setFeedRate(feedRate)
@@ -358,6 +488,8 @@ class MainWindow(QMainWindow, mainwindow_auto.Ui_MainWindow):
 		self.btnHome3.clicked.connect(lambda: self.handleCommand("home"))
 		self.btnHome4.clicked.connect(lambda: self.handleCommand("home"))
 		self.btnHome5.clicked.connect(lambda: self.handleCommand("home"))
+		self.btnHome6.clicked.connect(lambda: self.handleCommand("home"))
+		self.btnHome7.clicked.connect(lambda: self.handleCommand("home"))
 		self.btnControl.clicked.connect(lambda: self.handleCommand("control"))
 		self.btnConfigure.clicked.connect(lambda: self.handleCommand("configure"))
 		self.btnFile.clicked.connect(lambda: self.handleCommand("file"))
@@ -382,12 +514,20 @@ class MainWindow(QMainWindow, mainwindow_auto.Ui_MainWindow):
 		self.btnPointOne.clicked.connect(lambda: self.handleCommand("pointone"))
 		self.btnPostConnect.clicked.connect(lambda: self.handleCommand("postconnect"))
 		self.listFile.itemClicked.connect(self.selectFile)
-		self.btnStart.clicked.connect(lambda: self.handleCommand("printselected"))
-		self.btnStop.clicked.connect(lambda: self.handleCommand("printstop"))
-		self.btnSet.clicked.connect(lambda: self.handleCommand("setTemp"))		
-		#Timed updates to variables and GUI every 5 seconds
+		self.btnStart1.clicked.connect(lambda: self.handleCommand("printselected"))
+		self.btnTPause1.clicked.connect(lambda: self.handleCommand("printpause"))
+		self.btnStop1.clicked.connect(lambda: self.handleCommand("printstop"))
+		self.btnSet1.clicked.connect(lambda: self.handleCommand("setTemp"))
+		self.btnStart2.clicked.connect(lambda: self.handleCommand("printselected"))
+		self.btnTPause2.clicked.connect(lambda: self.handleCommand("printpause"))
+		self.btnStop2.clicked.connect(lambda: self.handleCommand("printstop"))
+		self.btnStart3.clicked.connect(lambda: self.handleCommand("printselected"))
+		self.btnTPause3.clicked.connect(lambda: self.handleCommand("printpause"))
+		self.btnStop3.clicked.connect(lambda: self.handleCommand("printstop"))
+
+		#Timed updates to variables and GUI every second
 		self.timer = QtCore.QTimer(self)
-		self.timer.setInterval(5000)
+		self.timer.setInterval(1000)
 		self.timer.timeout.connect(self.update)
 
 	#Start and stop timer at will
@@ -397,7 +537,6 @@ class MainWindow(QMainWindow, mainwindow_auto.Ui_MainWindow):
 		self.timer.stop()
 	#Timed update function
 
-	@QtCore.pyqtSlot()
 	def update(self):
 		#Declare global variables
 		global jobData
@@ -411,6 +550,12 @@ class MainWindow(QMainWindow, mainwindow_auto.Ui_MainWindow):
 		global headTemp
 		global bedTemp
 		global printerData
+		global newHeadTemp0
+		global newHeadTemp1
+		global newHeadTemp2
+		global newBedTemp
+		global newFeed
+		global threadRunning
 		#Try to get /api/connection json data
 		#If not None, update global variables, update GUI to reflect relevant values
 		if apiKey is not None and serverAddr is not None:
@@ -424,6 +569,8 @@ class MainWindow(QMainWindow, mainwindow_auto.Ui_MainWindow):
 			if "Closed" not in state and "Error" not in state:
 				self.btnPostConnect.setEnabled(False)
 				self.btnConnect.setEnabled(False)
+				self.btnMkDir.setEnabled(False)
+				self.btnMove.setEnabled(False)
 				#Try to get /api/printer json data
 				#If not None, update global variables, update GUI to reflect relevant values
 				if apiKey is not None and serverAddr is not None:
@@ -463,13 +610,110 @@ class MainWindow(QMainWindow, mainwindow_auto.Ui_MainWindow):
 			self.printBar.setValue(progress)
 		#Update printer temps and feeds from data
 		if printerData is not None:
-			headTemp = getHeadTemp(printerData)
-			bedTemp = getBedTemp(printerData)
-			self.numHead.display(headTemp)
-			self.numBed.display(bedTemp)
-		self.numFeed.display(feedRate)
-		#self.tempHead.setValue(headTarget)
-		#self.tempBed.setValue(bedTarget)
+			if headCount >= 2 and mixing is True:
+				headTemp = getHeadTemp(printerData)
+				bedTemp = getBedTemp(printerData)
+				self.numHead1.display(headTemp)
+				self.numBed1.display(bedTemp)
+				self.numFeed1.display(feedRate)
+			if headCount == 1 and mixing is False:
+				headTemp = getHeadTemp(printerData)
+				bedTemp = getBedTemp(printerData)
+				self.numHead1.display(headTemp)
+				self.numBed1.display(bedTemp)
+				self.numFeed1.display(feedRate)
+			if headCount == 2 and mixing is False:
+				if newHeadTemp0 is not None:
+					oldHeadTemp0 = newHeadTemp0
+				else:
+					oldHeadTemp0 = 0
+				if newHeadTemp1 is not None:
+					oldHeadTemp1 = newHeadTemp1
+				else:
+					oldHeadTemp1 = 0
+				if newBedTemp is not None:
+					oldBedTemp = newBedTemp
+				else:
+					oldBedTemp = 0
+				if newFeed is not None:
+					oldFeed = newFeed
+				else:
+					oldFeed = 100
+				newHeadTemp0 = self.tempHead0_2.value()
+				newHeadTemp1 = self.tempHead1_2.value()
+				newBedTemp = self.tempBed2.value()
+				newFeed = self.moveFeed2.value()
+				headTemp0 = getHeadTemp(printerData, "tool0")
+				headTemp1 = getHeadTemp(printerData, "tool1")
+				bedTemp = getBedTemp(printerData)
+				feedRate = self.moveFeed2.value()
+				if threadRunning == False:
+					self.numHead0_2.display(headTemp0)
+					self.numHead1_2.display(headTemp1)
+					self.numBed2.display(bedTemp)
+					self.numFeed2.display(feedRate)
+				if newHeadTemp0 != oldHeadTemp0 and threadRunning == False:
+					watchDial = self.watchTemp(self.tempHead0_2, self.numHead0_2, "tool0")
+					watchDial.start()
+					threadRunning = True		
+				if newHeadTemp1 != oldHeadTemp1 and threadRunning == False:
+					watchDial = self.watchTemp(self.tempHead1_2, self.numHead1_2, "tool1")
+					watchDial.start()
+					threadRunning = True
+				if newBedTemp != oldBedTemp and threadRunning == False:
+					watchDial = self.watchTemp(self.tempBed2, self.numBed2, "bed")
+					watchDial.start()
+					threadRunning = True
+				if newFeed != oldFeed and threadRunning == False:
+					watchDial = self.watchTemp(self.moveFeed2, self.numFeed2, "feed")
+					watchDial.start()
+					threadRunning = True
+			if headCount == 3 and mixing is False:
+				if newHeadTemp0 is not None:
+					oldHeadTemp0 = newHeadTemp0
+				else:
+					oldHeadTemp0 = 0
+				if newHeadTemp1 is not None:
+					oldHeadTemp1 = newHeadTemp1
+				else:
+					oldHeadTemp1 = 0
+				if newHeadTemp2 is not None:
+					oldHeadTemp2 = newHeadTemp2
+				else:
+					oldHeadTemp2 = 0
+				if newBedTemp is not None:
+					oldBedTemp = newBedTemp
+				else:
+					oldBedTemp = 0
+				newHeadTemp0 = self.tempHead0_3.value()
+				newHeadTemp1 = self.tempHead1_3.value()
+				newHeadTemp2 = self.tempHead1_3.value()
+				newBedTemp = self.tempBed3.value()
+				headTemp0 = getHeadTemp(printerData, "tool0")
+				headTemp1 = getHeadTemp(printerData, "tool1")
+				headTemp2 = getHeadTemp(printerData, "tool2")
+				bedTemp = getBedTemp(printerData)
+				if threadRunning == False:
+					self.numHead0_2.display(headTemp0)
+					self.numHead1_2.display(headTemp1)
+					self.numHead1_3.display(headTemp2)
+					self.numBed3.display(bedTemp)
+				if newHeadTemp0 != oldHeadTemp0 and threadRunning == False:
+					watchDial = self.watchTemp(self.tempHead0_3, self.numHead0_3, "tool0")
+					watchDial.start()
+					threadRunning = True		
+				if newHeadTemp1 != oldHeadTemp1 and threadRunning == False:
+					watchDial = self.watchTemp(self.tempHead1_3, self.numHead1_3, "tool1")
+					watchDial.start()
+					threadRunning = True
+				if newHeadTemp2 != oldHeadTemp2 and threadRunning == False:
+					watchDial = self.watchTemp(self.tempHead2_3, self.numHead2_3, "tool2")
+					watchDial.start()
+					threadRunning = True
+				if newBedTemp != oldBedTemp and threadRunning == False:
+					watchDial = self.watchTemp(self.tempBed3, self.numBed3, "bed")
+					watchDial.start()
+					threadRunning = True
 
 def main():
 	app = QApplication(sys.argv)
